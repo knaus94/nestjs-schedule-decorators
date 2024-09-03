@@ -10,9 +10,9 @@ npm install @knaus94/nestjs-schedule-decorators @nestjs/schedule
 ```typescript
 import { Injectable, Logger } from '@nestjs/common';
 import { OnApplicationBootstrap } from '@nestjs/common';
-import { SchedulerRegistry } from '@nestjs/schedule';
-import { MasterNodeService } from './master-node.service';
-import { initializeScheduledJobs, cleanupScheduledJobs } from '@knaus94/nestjs-schedule-decorators';
+import { SchedulerRegistry, CronExpression } from '@nestjs/schedule';
+import { MasterNodeService } from '@master-node/master-node.service';
+import { initializeScheduledJobs, cleanupScheduledJobs, ScheduleJob } from '@knaus94/nestjs-schedule-decorators';
 
 @Injectable()
 export class YourService implements OnApplicationBootstrap {
