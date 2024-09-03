@@ -36,5 +36,10 @@ export class YourService implements OnApplicationBootstrap {
          )
          .subscribe();
    }
+
+   @ScheduleJob('test-func', CronExpression.EVERY_DAY_AT_4AM)
+   async test() {
+      console.log('running');
+   }
 }
 ```
