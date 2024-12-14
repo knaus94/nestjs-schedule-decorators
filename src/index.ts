@@ -43,7 +43,6 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
       }
 
       if (schedulerRegistry.doesExist('cron', job.name)) {
-         Logger.warn(`Job ${job.name} already exists, skipping initialization`, constructor.name);
          return;
       }
 
@@ -52,16 +51,17 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
             return;
          }
 
+         const now = new Date();
+
          try {
             job.executing = true;
-            const now = new Date();
-            job.lastExecution = now;
             await method.apply(instance);
          } catch (error) {
-            Logger.error(`Error executing job ${job.name}: ${error.message}`, constructor.name);
-         } finally {
-            job.executing = false;
+            Logger.error(`Error executing missed job ${job.name}: ${error.message}`, constructor.name);
          }
+
+         job.executing = false;
+         job.lastExecution = now;
       });
 
       schedulerRegistry.addCronJob(job.name, cronJob);
@@ -79,27 +79,20 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
             try {
                job.executing = true;
                await method.apply(instance);
-               job.lastExecution = now;
             } catch (error) {
                Logger.error(`Error executing missed job ${job.name}: ${error.message}`, constructor.name);
-            } finally {
-               job.executing = false;
             }
+
+            job.executing = false;
+            job.lastExecution = now;
          }
       }, getCronInterval(job.cronExpression) / 2); // Check twice as often as the cron interval
    });
 }
 
-export function cleanupScheduledJobs(instance: any, schedulerRegistry?: SchedulerRegistry) {
+export function cleanupScheduledJobs(instance: any, schedulerRegistry: SchedulerRegistry) {
    const constructor = instance.constructor;
    const jobs: ScheduleMetadata[] = Reflect.getMetadata(SCHEDULE_METADATA_KEY, constructor) || [];
-
-   if (!schedulerRegistry) {
-      schedulerRegistry = instance?.schedulerRegistry;
-      if (!schedulerRegistry) {
-         throw new Error('SchedulerRegistry is not provided or available in the instance context.');
-      }
-   }
 
    Logger.debug(`Cleaning up scheduled jobs for ${constructor.name}`);
 
@@ -111,7 +104,7 @@ export function cleanupScheduledJobs(instance: any, schedulerRegistry?: Schedule
             job.intervalId = undefined;
          }
       } catch (error) {
-         Logger.error(`Failed to delete job ${job.name}: ${error.message}`, constructor.name);
+         //  Logger.error(`Failed to delete job ${job.name}: ${error.message}`, constructor.name);
       }
    });
 }
@@ -123,5 +116,5 @@ function getCronInterval(cronExpression: string): number {
    const msInMinute = 60000;
    const msInSecond = 1000;
 
-   return (hours || 0) * msInHour + (minutes || 0) * msInMinute + (seconds || 0) * msInSecond;
+   return hours * msInHour + minutes * msInMinute + seconds * msInSecond;
 }
