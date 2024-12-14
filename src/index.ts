@@ -90,9 +90,16 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
    });
 }
 
-export function cleanupScheduledJobs(instance: any, schedulerRegistry: SchedulerRegistry) {
+export function cleanupScheduledJobs(instance: any, schedulerRegistry?: SchedulerRegistry) {
    const constructor = instance.constructor;
    const jobs: ScheduleMetadata[] = Reflect.getMetadata(SCHEDULE_METADATA_KEY, constructor) || [];
+
+   if (!schedulerRegistry) {
+      schedulerRegistry = instance?.schedulerRegistry;
+      if (!schedulerRegistry) {
+         throw new Error('SchedulerRegistry is not provided or available in the instance context.');
+      }
+   }
 
    Logger.debug(`Cleaning up scheduled jobs for ${constructor.name}`);
 
