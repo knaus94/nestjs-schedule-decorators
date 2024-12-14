@@ -49,7 +49,6 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
 
       const cronJob = new CronJob(job.cronExpression, async () => {
          if (job.executing) {
-            Logger.warn(`Job ${job.name} is already executing. Skipping this run.`, constructor.name);
             return;
          }
 
@@ -74,7 +73,6 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
          const now = new Date();
          if (job.lastExecution && now.getTime() - job.lastExecution.getTime() > getCronInterval(job.cronExpression)) {
             if (job.executing) {
-               Logger.warn(`Job ${job.name} is already executing. Skipping this run.`, constructor.name);
                return;
             }
 

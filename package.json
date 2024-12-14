@@ -1,6 +1,6 @@
 {
   "name": "@knaus94/nestjs-schedule-decorators",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "knaus94",
   "license": "MIT",
   "typings": "dist/index.d.ts",
