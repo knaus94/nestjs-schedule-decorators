@@ -52,54 +52,54 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
       }
 
       // Проверяем, не был ли уже зарегистрирован такой cron
-      if (schedulerRegistry.doesExist('cron', job.name)) {
-         return;
+      if (!schedulerRegistry.doesExist('cron', job.name)) {
+         const cronJob = new CronJob(job.cronExpression, async () => {
+            if (job.executing) return;
+
+            try {
+               job.executing = true;
+               await method.apply(instance);
+            } catch (error) {
+               Logger.error(`Error executing job ${job.name}: ${error.message}`, constructor.name);
+            } finally {
+               job.executing = false;
+               job.lastExecution = new Date();
+            }
+         });
+
+         schedulerRegistry.addCronJob(job.name, cronJob);
+         cronJob.start();
+
+         Logger.log(`Scheduled job "${job.propertyKey}" with cron "${job.cronExpression}" and name "${job.name}"`, constructor.name);
       }
-
-      const cronJob = new CronJob(job.cronExpression, async () => {
-         if (job.executing) return;
-
-         try {
-            job.executing = true;
-            await method.apply(instance);
-         } catch (error) {
-            Logger.error(`Error executing job ${job.name}: ${error.message}`, constructor.name);
-         } finally {
-            job.executing = false;
-            job.lastExecution = new Date();
-         }
-      });
-
-      schedulerRegistry.addCronJob(job.name, cronJob);
-      cronJob.start();
-
-      Logger.log(`Scheduled job "${job.propertyKey}" with cron "${job.cronExpression}" and name "${job.name}"`, constructor.name);
    });
 
    // 2) Создаём один общий setInterval для проверки «пропущенных» задач
    const CHECK_INTERVAL = 30_000; // как часто проверять (каждые 30 секунд)
+   const intervalName = `missed_jobs_checker-${constructor.name}`;
 
-   const missedJobsChecker = setInterval(async () => {
-      const now = Date.now();
+   // Если интервал еще не зарегистрирован, регистрируем
+   if (!schedulerRegistry.doesExist('interval', intervalName)) {
+      const missedJobsChecker = setInterval(async () => {
+         const now = Date.now();
 
-      for (const job of jobs) {
-         // Если метод не был ещё запущен ни разу, пропускаем
-         if (!job.lastExecution) {
-            continue;
-         }
+         for (const job of jobs) {
+            // Если метод не был ещё запущен ни разу, пропускаем
+            if (!job.lastExecution) {
+               continue;
+            }
 
-         const expectedInterval = getCronInterval(job.cronExpression);
-         // Если getCronInterval() не смог корректно распарсить cron-строку (вернулось 0 или NaN), то пропускаем
-         if (!expectedInterval || isNaN(expectedInterval)) {
-            continue;
-         }
+            const expectedInterval = getCronInterval(job.cronExpression);
+            // Если getCronInterval() не смог корректно распарсить cron-строку (вернулось 0 или NaN), то пропускаем
+            if (!expectedInterval || isNaN(expectedInterval)) {
+               continue;
+            }
 
-         // Проверяем, сколько прошло времени с последнего запуска
-         const elapsed = now - job.lastExecution.getTime();
+            // Проверяем, сколько прошло времени с последнего запуска
+            const elapsed = now - job.lastExecution.getTime();
 
-         // Если прошло заметно больше, чем ожидаемый интервал, считаем это "пропущенным" запуском
-         if (elapsed > expectedInterval * 1.5) {
-            if (!job.executing) {
+            // Если прошло заметно больше, чем ожидаемый интервал, считаем это "пропущенным" запуском
+            if (elapsed > expectedInterval * 1.5 && !job.executing) {
                try {
                   Logger.warn(`Missed execution detected for job ${job.name}`, constructor.name);
                   job.executing = true;
@@ -112,13 +112,14 @@ export function initializeScheduledJobs(instance: any, schedulerRegistry?: Sched
                }
             }
          }
-      }
-   }, CHECK_INTERVAL);
+      }, CHECK_INTERVAL);
 
-   // Регистрируем этот общий таймер в SchedulerRegistry,
-   // чтобы при необходимости можно было его удалить
-   const intervalName = `missed_jobs_checker-${constructor.name}`;
-   schedulerRegistry.addInterval(intervalName, missedJobsChecker);
+      // Регистрируем этот общий таймер в SchedulerRegistry,
+      // чтобы при необходимости можно было его удалить
+      schedulerRegistry.addInterval(intervalName, missedJobsChecker);
+   } else {
+      Logger.warn(`Interval "${intervalName}" is already registered in SchedulerRegistry. Skipping creation.`, constructor.name);
+   }
 }
 
 // =================== Очистка cron-задач ===================
@@ -149,15 +150,12 @@ export function cleanupScheduledJobs(instance: any, schedulerRegistry?: Schedule
    const intervalName = `missed_jobs_checker-${constructor.name}`;
    try {
       schedulerRegistry.deleteInterval(intervalName);
+      Logger.debug(`Deleted interval "${intervalName}"`, constructor.name);
    } catch (error) {
       // Игнорируем
    }
 }
 
-// =================== Упрощённая функция парсинга cron ===================
-// ВАЖНО: эта функция корректна ТОЛЬКО для формата "sec min hour" (3 поля).
-// Для более сложных выражений используйте библиотеку cron-parser.
-// Пример: "0 5 1" => секунды=0, минуты=5, часы=1 => интервал = 1 ч 5 мин
 function getCronInterval(cronExpression: string): number {
    const parts = cronExpression.split(' ').map(Number);
    // Ожидаем ровно 3 части (сек, мин, час)
@@ -168,9 +166,9 @@ function getCronInterval(cronExpression: string): number {
 
    const [seconds, minutes, hours] = parts;
 
-   const msInHour = 3600000;
-   const msInMinute = 60000;
-   const msInSecond = 1000;
+   const msInHour = 3_600_000;
+   const msInMinute = 60_000;
+   const msInSecond = 1_000;
 
    return hours * msInHour + minutes * msInMinute + seconds * msInSecond;
 }
