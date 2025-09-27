@@ -13,6 +13,8 @@ const SCHEDULE_METADATA_KEY = Symbol('SCHEDULE_METADATA_KEY');
 // Hidden symbols for per-instance state and subscription
 const SCHEDULE_STATE = Symbol('SCHEDULE_STATE');
 const SCHEDULE_CONTROL_SUB = Symbol('SCHEDULE_CONTROL_SUB');
+// // Per-instance debug flag (opt-in)
+const SCHEDULE_DEBUG = Symbol('SCHEDULE_DEBUG');
 
 export interface ScheduleMetadata {
    // Human-readable job name for logs
@@ -36,7 +38,7 @@ function getOrCreateState(instance: any): StateMap {
    let state: StateMap = (instance as any)[SCHEDULE_STATE];
    if (!state) {
       state = new Map();
-      // Define as non-enumerable to avoid accidental leaks on logs/serializations
+      // // Define as non-enumerable to avoid accidental leaks on logs/serializations
       Object.defineProperty(instance, SCHEDULE_STATE, {
          value: state,
          enumerable: false,
@@ -74,13 +76,16 @@ export function ScheduleJob(name: string, cronExpression: string, options?: { sk
 /**
  * Class decorator that wires up bootstrap/destroy hooks automatically.
  * - control$: factory returning Observable<boolean>; when true -> start jobs, false -> stop jobs
- * - If control$ is not provided, tries this.masterNodeService.isMaster$; if missing, starts immediately.
+ * - If control$ is missing or invalid, logs error and DOES NOT start jobs.
+ * - debug: enable Logger.debug (disabled by default).
  */
 export function AutoScheduleJobs(opts?: {
    control$?: (self: any) => Observable<boolean> | undefined;
    bootstrapHook?: 'onApplicationBootstrap' | 'onModuleInit';
+   debug?: boolean;
 }): ClassDecorator {
    const bootstrapHook = opts?.bootstrapHook ?? 'onApplicationBootstrap';
+   const debugEnabled = !!opts?.debug;
 
    return (target: any) => {
       const proto = target.prototype;
@@ -90,7 +95,7 @@ export function AutoScheduleJobs(opts?: {
 
       // Patch bootstrap hook
       proto[bootstrapHook] = function (...args: any[]) {
-         // Call user-defined hook first to preserve original semantics
+         // // Call user-defined hook first to preserve original semantics
          if (typeof origBootstrap === 'function') {
             origBootstrap.apply(this, args);
          }
@@ -103,44 +108,56 @@ export function AutoScheduleJobs(opts?: {
             return;
          }
 
-         // Resolve control$ (if any)
+         // // Persist per-instance debug flag (opt-in)
+         Object.defineProperty(this, SCHEDULE_DEBUG, {
+            value: debugEnabled,
+            enumerable: false,
+            configurable: false,
+            writable: false,
+         });
+
+         // // Resolve control$ strictly from provided factory
+         if (!opts?.control$) {
+            Logger.error(`AutoScheduleJobs: control$ factory not provided for ${ctorName}; scheduled jobs will NOT start.`, 'AutoScheduleJobs');
+            return;
+         }
+
          let control$: Observable<boolean> | undefined;
          try {
-            control$ =
-               opts?.control$?.(this) ??
-               // Heuristic: try this.masterNodeService.isMaster$ if it looks like an observable
-               (this?.masterNodeService?.isMaster$ && typeof this.masterNodeService.isMaster$?.subscribe === 'function'
-                  ? this.masterNodeService.isMaster$
-                  : undefined);
-         } catch {
-            // noop: fall back to immediate start
+            control$ = opts.control$(this);
+         } catch (e: any) {
+            Logger.error(
+               `AutoScheduleJobs: control$ factory threw for ${ctorName}: ${e instanceof Error ? e.message : String(e)}; jobs will NOT start.`,
+               'AutoScheduleJobs',
+            );
+            return;
          }
 
-         if (control$ && typeof control$.subscribe === 'function') {
-            // Subscribe to master/non-master toggle
-            const sub: Subscription = control$.subscribe({
-               next: (enabled: boolean) => {
-                  if (enabled) {
-                     initializeScheduledJobs(this);
-                  } else {
-                     cleanupScheduledJobs(this);
-                  }
-               },
-               error: (err: any) => {
-                  Logger.error(`control$ error: ${err instanceof Error ? err.message : String(err)}`, ctorName);
-               },
-            });
-
-            Object.defineProperty(this, SCHEDULE_CONTROL_SUB, {
-               value: sub,
-               enumerable: false,
-               configurable: false,
-               writable: false,
-            });
-         } else {
-            // No control$ detected — start immediately
-            initializeScheduledJobs(this);
+         if (!control$ || typeof (control$ as any).subscribe !== 'function') {
+            Logger.error(`AutoScheduleJobs: control$ is missing or not an Observable for ${ctorName}; jobs will NOT start.`, 'AutoScheduleJobs');
+            return;
          }
+
+         // // Subscribe to master/non-master toggle
+         const sub: Subscription = control$.subscribe({
+            next: (enabled: boolean) => {
+               if (enabled) {
+                  initializeScheduledJobs(this);
+               } else {
+                  cleanupScheduledJobs(this);
+               }
+            },
+            error: (err: any) => {
+               Logger.error(`control$ error: ${err instanceof Error ? err.message : String(err)}`, ctorName);
+            },
+         });
+
+         Object.defineProperty(this, SCHEDULE_CONTROL_SUB, {
+            value: sub,
+            enumerable: false,
+            configurable: false,
+            writable: false,
+         });
       };
 
       // Patch destroy hook to cleanup jobs and subscription
@@ -177,11 +194,13 @@ export function initializeScheduledJobs(instance: any): void {
    const state = getOrCreateState(instance);
    Logger.log(`Initializing ${defs.length} scheduled job(s) for ${ctor.name}`, 'Scheduler');
 
+   const debug = !!(instance as any)[SCHEDULE_DEBUG];
+
    for (const def of defs) {
       const key = def.propertyKey;
       const entry = state.get(key) ?? {};
       if (entry.job) {
-         // Already scheduled for this instance -> skip
+         // // Already scheduled for this instance -> skip
          continue;
       }
 
@@ -190,13 +209,12 @@ export function initializeScheduledJobs(instance: any): void {
          throw new Error(`Method "${String(key)}" not found on ${ctor.name}`);
       }
 
-      // Create node-schedule job
+      // // Create node-schedule job
       let job: Job | undefined;
       try {
          const context = `${ctor.name}.${String(key)}`;
          job = scheduleJob(def.cronExpression, async () => {
             if (def.skipIfRunning && entry.running) {
-               // Skip overlapping run to avoid piling up work
                Logger.warn(`Job "${def.name}" skipped (previous run in progress)`, context);
                return;
             }
@@ -210,7 +228,9 @@ export function initializeScheduledJobs(instance: any): void {
             } finally {
                entry.running = false;
                const elapsed = Date.now() - started;
-               Logger.debug(`Job "${def.name}" finished in ${elapsed}ms`, context);
+               if (debug) {
+                  Logger.debug(`Job "${def.name}" finished in ${elapsed}ms`, context);
+               }
             }
          });
       } catch (e: any) {
@@ -239,13 +259,16 @@ export function cleanupScheduledJobs(instance: any): void {
    const state: StateMap | undefined = (instance as any)[SCHEDULE_STATE];
    if (!state || state.size === 0) return;
 
-   Logger.debug(`Cleaning up scheduled jobs for ${ctor.name}`, 'Scheduler');
+   const debug = !!(instance as any)[SCHEDULE_DEBUG];
+   if (debug) {
+      Logger.debug(`Cleaning up scheduled jobs for ${ctor.name}`, 'Scheduler');
+   }
 
    for (const [key, entry] of state) {
       try {
          entry.job?.cancel();
       } catch {
-         // ignore cancel error; we are destroying anyway
+         // // ignore cancel error; we are destroying anyway
       } finally {
          entry.job = undefined;
          entry.running = false;
