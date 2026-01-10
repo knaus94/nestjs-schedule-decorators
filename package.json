@@ -1,6 +1,6 @@
 {
   "name": "@knaus94/nestjs-schedule-decorators",
-  "version": "1.0.61",
+  "version": "1.0.62",
   "author": "knaus94",
   "license": "MIT",
   "typings": "dist/index.d.ts",
@@ -23,7 +23,6 @@
     "eslint": "^9.36.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
-    "node-schedule": "^2.1.1",
     "prettier": "^3.6.2",
     "rimraf": "^6.0.1",
     "source-map-support": "^0.5.21",
@@ -62,6 +61,7 @@
   "dependencies": {
     "@nestjs/common": ">=11.1.6",
     "@nestjs/core": ">=11.1.6",
-    "@nestjs/schedule": ">=6.0.1"
+    "@nestjs/schedule": ">=6.0.1",
+    "node-schedule": ">=2.1.1"
   }
 }
